@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    name: Container-level smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Run smoke test
+        run: ./test/smoke-test.sh
+
+  publish:
+    name: Build and publish multi-arch extension + installer images
+    needs: [smoke-test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+        with:
+          # this job also pushes to a local registry on 127.0.0.1 (as the
+          # staging area imager reads from) - see the same note above.
+          driver-opts: |
+            network=host
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag
+        run: |
+          set -a; source VERSION; set +a
+          # Canonical tag format: {talos}-{frr}-{revision} - see
+          # VERSION and scripts/bump-version.sh.
+          echo "TAG=${TALOS_VERSION}-${FRR_VERSION}-${EXTENSION_REVISION}" >> "$GITHUB_ENV"
+          echo "TALOS_VERSION=${TALOS_VERSION}" >> "$GITHUB_ENV"
+          echo "FRR_VERSION=${FRR_VERSION}" >> "$GITHUB_ENV"
+          echo "EXTENSION_REVISION=${EXTENSION_REVISION}" >> "$GITHUB_ENV"
+
+      - name: Start local registry (staging area for imager - see note below)
+        run: make registry-up
+
+      - name: Build and push multi-arch extension image (to ghcr.io AND the local registry)
+        # Pushed to both in one buildx invocation so the exact same
+        # manifests are used everywhere: ghcr.io is the public artifact,
+        # the local plain-HTTP registry is what `imager` (below) reads
+        # from - it needs a registry it can read from inside its own
+        # container without ghcr.io credentials, and bouncing a
+        # multi-arch manifest through `docker buildx imagetools`/`docker
+        # manifest` into a plain-HTTP registry needs extra insecure-
+        # registry plumbing that a single multi-tag push avoids entirely.
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg FRR_VERSION="${{ env.FRR_VERSION }}" \
+            --build-arg EXTENSION_REVISION="${{ env.EXTENSION_REVISION }}" \
+            --build-arg TALOS_VERSION="${{ env.TALOS_VERSION }}" \
+            -t ghcr.io/${{ github.repository_owner }}/frr-for-talos/extension:${{ env.TAG }} \
+            -t ghcr.io/${{ github.repository_owner }}/frr-for-talos/extension:latest \
+            -t 127.0.0.1:5005/frr-extension:${{ env.TAG }} \
+            --push .
+
+      - name: Build installer images and push to ghcr.io
+        run: |
+          ./test/build-installer.sh \
+            "127.0.0.1:5005/frr-extension:${{ env.TAG }}" \
+            "ghcr.io/${{ github.repository_owner }}/frr-for-talos/installer:${{ env.TAG }}" \
+            "linux/amd64,linux/arm64"
+
+      - name: Also tag installer as :latest
+        # ghcr.io-to-ghcr.io only (both real, authenticated registries) -
+        # no insecure-registry concerns here, unlike the local registry.
+        run: |
+          docker buildx imagetools create \
+            -t "ghcr.io/${{ github.repository_owner }}/frr-for-talos/installer:latest" \
+            "ghcr.io/${{ github.repository_owner }}/frr-for-talos/installer:${{ env.TAG }}"

@@ -1,0 +1,4 @@
+.smoke-test-tmp-*
+.integration-test-tmp-*
+_out/
+*.tar

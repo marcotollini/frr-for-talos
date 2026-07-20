@@ -1,0 +1,23 @@
+version: v1alpha1
+metadata:
+  name: frr
+  version: "${TALOS_VERSION}-${FRR_VERSION}-${EXTENSION_REVISION}"
+  author: Marco Tollini
+  description: |
+    FRRouting (FRR) system extension for Talos Linux.
+
+    Provides zebra (kernel route installation), bgpd (BGP) and bfdd (BFD)
+    as a Talos extension service. mgmtd and staticd are also enabled since
+    FRR requires them to always run. All other daemons are disabled by
+    default and can be enabled by overriding /etc/frr/daemons via an
+    ExtensionServiceConfig.
+
+    FRR itself ships no static routing configuration: /etc/frr/frr.conf is
+    an inert placeholder until it is overridden at runtime via a Talos
+    ExtensionServiceConfig (applied with `talosctl patch machineconfig`).
+
+    See https://github.com/marcotollini/frr-for-talos for configuration
+    instructions.
+  compatibility:
+    talos:
+      version: ">= v1.11.0"

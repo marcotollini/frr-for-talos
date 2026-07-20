@@ -1,0 +1,88 @@
+! ---------------------------------------------------------------------------
+! Example frr.conf for one Talos node (e.g. node "A"), implementing the
+! topology:
+!
+!   - iBGP, single AS shared by every node, R and S
+!   - every node peers with R (route reflector) and S (route reflector)
+!   - every node has a /32 loopback (10.10.0.0/24 range) that is also its
+!     BGP router-id, advertised into BGP
+!   - BFD is enabled on both peerings for fast failure detection
+!   - only the loopback /32 is advertised into BGP - the VLAN transit
+!     subnets themselves are reachable directly over L2, not via BGP
+!
+! This is a REFERENCE only. It is not baked into the extension image and is
+! not applied automatically. Render one of these per node (substituting the
+! placeholders below) and ship it via an ExtensionServiceConfig - see
+! examples/extensionserviceconfig.yaml - applied with:
+!
+!   talosctl patch machineconfig -p @extensionserviceconfig.yaml -n <node-ip>
+!
+! Placeholders to substitute per node:
+!   <ASN>            iBGP AS number, e.g. 65000 - must be identical on
+!                    every node, on R and on S.
+!   <NODE_LOOPBACK>  this node's loopback, e.g. 10.10.0.1 for node A,
+!                    10.10.0.2 for node B, 10.10.0.3 for node C.
+!   <IFACE_TO_R>     name of this node's VLAN1011 interface facing R, as
+!                    configured in Talos's own machine.network (e.g.
+!                    eth0.1011, bond0.1011). Only needed if peering by
+!                    interface (see note on unnumbered peering below).
+!   <R_IP>           R's address in VLAN1011 (10.10.11.254 per the task's
+!                    addressing table).
+!   <S_IP>           S's BGP peering address reachable over VLAN1012.
+!                    The task notes S normally holds no address in the
+!                    10.10.12.0/24 range ("S has no IP") - fill in
+!                    whatever address S actually peers BGP from (e.g. a
+!                    dedicated management/loopback address on S). This is
+!                    a property of your S configuration, not of this
+!                    extension.
+! ---------------------------------------------------------------------------
+frr defaults traditional
+hostname talos-node-a
+log stdout notifications
+service integrated-vtysh-config
+!
+! Loopback address representing this node's identity. In production this
+! is normally configured by Talos itself (machine.network.interfaces on a
+! "lo"/dummy interface) rather than by FRR - FRR only needs it to already
+! be present so the `network` statement below can find it in the RIB.
+!
+router bgp <ASN>
+ bgp router-id <NODE_LOOPBACK>
+ no bgp default ipv4-unicast
+ !
+ neighbor <R_IP> remote-as <ASN>
+ neighbor <R_IP> description R (route-reflector, VLAN1011)
+ neighbor <R_IP> bfd
+ neighbor <R_IP> timers 3 9
+ !
+ neighbor <S_IP> remote-as <ASN>
+ neighbor <S_IP> description S (route-reflector, VLAN1012)
+ neighbor <S_IP> bfd
+ neighbor <S_IP> timers 3 9
+ !
+ address-family ipv4 unicast
+  neighbor <R_IP> activate
+  neighbor <S_IP> activate
+  network <NODE_LOOPBACK>/32
+ exit-address-family
+!
+! BFD timers: 300ms interval, multiplier 3 (~900ms detection) - tune to
+! taste. Applies to both peerings; split into separate profiles if R and S
+! need different timers.
+!
+bfd
+ peer <R_IP>
+  detect-multiplier 3
+  receive-interval 300
+  transmit-interval 300
+  no shutdown
+ !
+ peer <S_IP>
+  detect-multiplier 3
+  receive-interval 300
+  transmit-interval 300
+  no shutdown
+ !
+!
+line vty
+!

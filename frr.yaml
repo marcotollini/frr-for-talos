@@ -1,0 +1,33 @@
+name: frr
+container:
+  entrypoint: /sbin/tini
+  # The /var/run/frr bind mount below (a HOST path, for vtysh debug-pod
+  # access) doesn't pre-exist on a stock Talos node, so the container
+  # runtime auto-creates it as root:root before FRR ever starts.
+  # frrcommon.sh only chowns that directory to frr:frr when it does NOT
+  # already exist - since the mount means it already does, that fix-up
+  # never runs, and every daemon (which runs as user frr, not root) fails
+  # to create its PID file with "Permission denied", forever. Fix it
+  # ourselves here, before handing off to docker-start (tini/this shell
+  # still run as root regardless of how the directory got there).
+  args:
+    - --
+    - /bin/sh
+    - -c
+    - "mkdir -p /var/run/frr && chown frr:frr /var/run/frr && exec /usr/lib/frr/docker-start"
+  security:
+    writeableRootfs: true
+    writeableSysfs: true
+  mounts:
+    - source: /var/run/frr
+      destination: /var/run/frr
+      type: bind
+      options:
+        - rbind
+        - rshared
+        - rw
+depends:
+  - network:
+      - addresses
+  - configuration: true
+restart: always

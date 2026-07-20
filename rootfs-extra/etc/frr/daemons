@@ -1,0 +1,18 @@
+# This file tells the frr package which daemons to start.
+#
+# This file can be overridden at runtime via a Talos ExtensionServiceConfig
+# that mounts a replacement to /etc/frr/daemons, e.g. to additionally
+# enable ospfd.
+#
+bgpd=yes
+bfdd=yes
+
+# -A 127.0.0.1 restricts each daemon's legacy VTY listener to localhost.
+# Without it, since this extension runs in the host network namespace,
+# the VTY would be reachable from the node's real network interfaces
+# instead of just loopback. Only listed for daemons that actually run.
+zebra_options="  -A 127.0.0.1 -s 90000000"
+mgmtd_options="  -A 127.0.0.1"
+staticd_options="-A 127.0.0.1"
+bgpd_options="   -A 127.0.0.1"
+bfdd_options="   -A 127.0.0.1"
