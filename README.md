@@ -21,7 +21,7 @@ Pinned versions (see [`VERSION`](VERSION)):
 | Component | Version |
 |---|---|
 | FRR       | 10.7.0 (`quay.io/frrouting/frr:10.7.0`, official multi-arch image) |
-| Talos     | v1.13.6 |
+| Talos     | v1.13.7 |
 
 ## How it's put together
 
