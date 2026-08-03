@@ -16,12 +16,16 @@ config (`talosctl patch machineconfig` with an `ExtensionServiceConfig`).
 This repo builds a standalone Talos system extension, a fully-built Talos **installer image**
 with the extension baked in, and CI that publishes both to `ghcr.io`.
 
+The installer image also carries a set of **official siderolabs extensions**
+(see [Bundled official extensions](#bundled-official-extensions)).
+
 Pinned versions (see [`VERSION`](VERSION)):
 
 | Component | Version |
 |---|---|
 | FRR       | 10.7.0 (`quay.io/frrouting/frr:10.7.0`, official multi-arch image) |
 | Talos     | v1.13.7 |
+| Official extensions | resolved per Talos release, never pinned by hand |
 
 ## How it's put together
 
@@ -79,11 +83,33 @@ make installer          # build a full Talos installer image (via imager) with
                         # the extension baked in, push to $INSTALLER_IMAGE
 ```
 
+## Bundled official extensions
+
+Beyond FRR, the installer bakes in the extensions named by
+`OFFICIAL_EXTENSIONS` in [`VERSION`](VERSION):
+
+| Extension | Why |
+|---|---|
+| `siderolabs/iscsi-tools` | `iscsid`/`iscsiadm` — how Longhorn attaches every volume. Without it Longhorn installs cleanly and then never attaches anything. |
+| `siderolabs/util-linux-tools` | `fstrim` — Longhorn volume trimming. |
+
+These are **names, not versions.** An extension is a kernel module payload
+built against one specific Talos release, so a hand-pinned version that drifts
+out of step with `TALOS_VERSION` produces a node that does not come back.
+Rather than pin them, [`test/build-installer.sh`](test/build-installer.sh)
+resolves each name at build time out of
+`ghcr.io/siderolabs/extensions:${TALOS_VERSION}`.
+
+So bumping `TALOS_VERSION` moves the extensions with it, automatically and
+reproducibly. Adding another is one name in the comma-separated list.
+
+Leave `OFFICIAL_EXTENSIONS` empty for an FRR-only installer.
+
 ## Versioning
 
 [`VERSION`](VERSION) is the single source of truth for every pinned
 version (`FRR_VERSION`, `TALOS_VERSION`, `IMAGER_VERSION`,
-`EXTENSION_REVISION`).
+`EXTENSION_REVISION`) and for `OFFICIAL_EXTENSIONS` above.
 
 Both the extension image and the installer image are always tagged
 `{talos-version}-{frr-version}-{revision}`, e.g. `v1.13.6-10.7.0-1`,
@@ -184,9 +210,8 @@ netlink I/O is unreliable under qemu-user cross-arch emulation.
 
 ## Scope
 
-This repo is the FRR Talos extension only, per the project brief - it
-does not configure Talos networking (VLANs/bonding on `nic0`/`nic1`),
-Cilium's own BGP control plane, or R/S themselves. `examples/` shows how
+This repo builds the FRR Talos extension, and an installer image carrying it
+alongside the official extensions listed above. `examples/` shows how
 the extension's configuration surface maps onto the decided topology, but
 the actual per-node ASN/IP substitution, R/S-side BGP route-reflector
 config, and Talos `machine.network` interface setup are out of scope
