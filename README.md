@@ -23,7 +23,7 @@ Pinned versions (see [`VERSION`](VERSION)):
 
 | Component | Version |
 |---|---|
-| FRR       | 10.7.0 (`quay.io/frrouting/frr:10.7.0`, official multi-arch image) |
+| FRR       | 10.7.1 (`quay.io/frrouting/frr:10.7.1`, official multi-arch image) |
 | Talos     | v1.13.7 |
 | Official extensions | resolved per Talos release, never pinned by hand |
 
@@ -201,7 +201,7 @@ netlink I/O is unreliable under qemu-user cross-arch emulation.
   `hostPath` mount of `/var/run/frr`:
 
   ```
-  kubectl run frr-debug --image=quay.io/frrouting/frr:10.7.0 \
+  kubectl run frr-debug --image=quay.io/frrouting/frr:10.7.1 \
     --overrides='{"spec":{"nodeName":"<node-name>","tolerations":[{"operator":"Exists"}]}}' \
     --command -- sleep infinity
   kubectl set volume pod/frr-debug --add --type=hostPath --path=/var/run/frr --mount-path=/var/run/frr
