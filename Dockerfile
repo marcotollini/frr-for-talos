@@ -7,8 +7,8 @@
 #   /rootfs/<files to overlay onto the Talos root filesystem>
 # Talos's `imager` converts /rootfs into a squashfs at boot-asset build time.
 
-ARG FRR_VERSION=10.7.0
-ARG EXTENSION_REVISION=2
+ARG FRR_VERSION=10.7.1
+ARG EXTENSION_REVISION=1
 ARG TALOS_VERSION=v1.13.6
 
 # The upstream FRR image already provides multi-arch (amd64/arm64/...)
