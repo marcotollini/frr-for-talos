@@ -1,15 +1,14 @@
 name: check-upstream-versions
 
-# Polls FRR/Talos/imager upstream releases on a schedule and opens a PR
-# via scripts/bump-version.sh when a newer one is available. Each
-# component is fully independent (mirrors scripts/bump-version.sh's own
-# frr/talos/imager subcommands) - a new Talos release does not force
-# IMAGER_VERSION to move too, even though in practice you'll usually want
-# both bumped together (the check-imager job below does default to
-# tracking Talos releases, since imager itself is versioned 1:1 with
-# Talos upstream - but it's a separate job/PR, not forced coupling).
+# Polls FRR/Talos/imager upstream releases on a schedule and opens ONE PR
+# via scripts/bump-version.sh bumping whichever of them is newer. Each
+# component is still bumped independently (mirrors scripts/bump-version.sh's
+# own frr/talos/imager subcommands) - a new FRR release does not force Talos
+# to move too - but they share one branch, one smoke test and one PR, so a
+# release of several never opens several PRs. imager is versioned 1:1 with
+# Talos upstream, so in practice it moves with Talos.
 #
-# The container-level smoke test runs against the bumped version before
+# The container-level smoke test runs against the bumped versions before
 # any PR is opened, so a broken upstream release doesn't land as a
 # seemingly-valid PR. Note: PRs opened with the default GITHUB_TOKEN do
 # NOT trigger ci.yml's own `pull_request` run (a GitHub Actions
@@ -28,31 +27,73 @@ permissions:
   pull-requests: write
 
 jobs:
-  check-frr:
-    name: Check for a new FRR release
+  check:
+    name: Check for new FRR, Talos and imager releases
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compare current vs latest FRR release
+      - name: Compare current vs latest releases
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -a; source VERSION; set +a
-          LATEST="$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/FRRouting/frr/releases/latest \
-            | jq -r '.tag_name' | sed 's/^frr-//')"
-          echo "current=${FRR_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          [ "$LATEST" != "$FRR_VERSION" ] && echo "new=true" >> "$GITHUB_OUTPUT" || echo "new=false" >> "$GITHUB_OUTPUT"
+          latest() {
+            curl -sf -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/$1/releases/latest" | jq -r '.tag_name'
+          }
+          FRR_LATEST="$(latest FRRouting/frr | sed 's/^frr-//')"
+          # ghcr.io/siderolabs/imager has no separate GitHub releases of its
+          # own - it's published out of siderolabs/talos and tagged 1:1
+          # with Talos releases, so that's what "latest" means for both.
+          TALOS_LATEST="$(latest siderolabs/talos)"
+          for v in "$FRR_LATEST" "$TALOS_LATEST"; do
+            [ -n "$v" ] && [ "$v" != null ] || { echo "could not read an upstream release" >&2; exit 1; }
+          done
+
+          changes=()
+          bumps=()
+          if [ "$FRR_LATEST" != "$FRR_VERSION" ]; then
+            changes+=("FRR ${FRR_VERSION} -> ${FRR_LATEST}")
+            bumps+=("frr ${FRR_LATEST}")
+          fi
+          if [ "$TALOS_LATEST" != "$TALOS_VERSION" ]; then
+            changes+=("Talos ${TALOS_VERSION} -> ${TALOS_LATEST}")
+            bumps+=("talos ${TALOS_LATEST}")
+          fi
+          if [ "$TALOS_LATEST" != "$IMAGER_VERSION" ]; then
+            changes+=("imager ${IMAGER_VERSION} -> ${TALOS_LATEST}")
+            bumps+=("imager ${TALOS_LATEST}")
+          fi
+
+          if [ "${#bumps[@]}" -eq 0 ]; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "new=true" >> "$GITHUB_OUTPUT"
+          echo "frr=${FRR_LATEST}" >> "$GITHUB_OUTPUT"
+          echo "talos=${TALOS_LATEST}" >> "$GITHUB_OUTPUT"
+          {
+            echo "bumps<<EOF"
+            printf '%s\n' "${bumps[@]}"
+            echo "EOF"
+            echo "summary=$(IFS=,; echo "${changes[*]}" | sed 's/,/, /g')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Bump VERSION
         if: steps.check.outputs.new == 'true'
-        run: ./scripts/bump-version.sh frr "${{ steps.check.outputs.latest }}"
+        run: |
+          while read -r component version; do
+            ./scripts/bump-version.sh "$component" "$version"
+          done <<'EOF'
+          ${{ steps.check.outputs.bumps }}
+          EOF
 
       - uses: docker/setup-buildx-action@v4
         if: steps.check.outputs.new == 'true'
 
-      - name: Smoke-test the bumped version before proposing it
+      - name: Smoke-test the bumped versions before proposing them
         if: steps.check.outputs.new == 'true'
         run: ./test/smoke-test.sh
 
@@ -60,111 +101,19 @@ jobs:
         if: steps.check.outputs.new == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          branch: bump-frr-version
+          branch: bump-versions
           delete-branch: true
-          title: "chore: bump FRR ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
-          commit-message: "chore: bump FRR ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
+          title: "chore: bump ${{ steps.check.outputs.summary }}"
+          commit-message: "chore: bump ${{ steps.check.outputs.summary }}"
           body: |
-            A new FRR release is available upstream:
-            https://github.com/FRRouting/frr/releases/tag/frr-${{ steps.check.outputs.latest }}
+            New upstream releases are available: ${{ steps.check.outputs.summary }}
+
+            - FRR: https://github.com/FRRouting/frr/releases/tag/frr-${{ steps.check.outputs.frr }}
+            - Talos (and imager, which tracks it): https://github.com/siderolabs/talos/releases/tag/${{ steps.check.outputs.talos }}
 
             Opened automatically by `.github/workflows/version-check.yml` via
-            `scripts/bump-version.sh frr`. The container-level smoke test (build +
-            a real two-node iBGP/BFD session, see `test/smoke-test.sh`) already
-            passed against this bump. Merging to `main` publishes the new images
-            (see `ci.yml`).
-
-  check-talos:
-    name: Check for a new Talos release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Compare current vs latest Talos release
-        id: check
-        run: |
-          set -a; source VERSION; set +a
-          LATEST="$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/siderolabs/talos/releases/latest \
-            | jq -r '.tag_name')"
-          echo "current=${TALOS_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          [ "$LATEST" != "$TALOS_VERSION" ] && echo "new=true" >> "$GITHUB_OUTPUT" || echo "new=false" >> "$GITHUB_OUTPUT"
-
-      - name: Bump VERSION
-        if: steps.check.outputs.new == 'true'
-        run: ./scripts/bump-version.sh talos "${{ steps.check.outputs.latest }}"
-
-      - uses: docker/setup-buildx-action@v4
-        if: steps.check.outputs.new == 'true'
-
-      - name: Smoke-test the bumped version before proposing it
-        if: steps.check.outputs.new == 'true'
-        run: ./test/smoke-test.sh
-
-      - name: Open PR
-        if: steps.check.outputs.new == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          branch: bump-talos-version
-          delete-branch: true
-          title: "chore: bump Talos ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
-          commit-message: "chore: bump Talos ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
-          body: |
-            A new Talos release is available upstream:
-            https://github.com/siderolabs/talos/releases/tag/${{ steps.check.outputs.latest }}
-
-            This does not also bump IMAGER_VERSION (see the separate check-imager
-            job/PR) - they're independently controlled, see `scripts/bump-version.sh`.
-
-            Opened automatically by `.github/workflows/version-check.yml` via
-            `scripts/bump-version.sh talos`. The container-level smoke test already
-            passed against this bump. Merging to `main` publishes the new images
-            (see `ci.yml`).
-
-  check-imager:
-    name: Check for a new imager release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Compare current vs latest imager release
-        id: check
-        # ghcr.io/siderolabs/imager has no separate GitHub releases of its
-        # own - it's published out of siderolabs/talos and tagged 1:1
-        # with Talos releases, so that's what "latest" means here too.
-        run: |
-          set -a; source VERSION; set +a
-          LATEST="$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/siderolabs/talos/releases/latest \
-            | jq -r '.tag_name')"
-          echo "current=${IMAGER_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          [ "$LATEST" != "$IMAGER_VERSION" ] && echo "new=true" >> "$GITHUB_OUTPUT" || echo "new=false" >> "$GITHUB_OUTPUT"
-
-      - name: Bump VERSION
-        if: steps.check.outputs.new == 'true'
-        run: ./scripts/bump-version.sh imager "${{ steps.check.outputs.latest }}"
-
-      - uses: docker/setup-buildx-action@v4
-        if: steps.check.outputs.new == 'true'
-
-      - name: Smoke-test the bumped version before proposing it
-        if: steps.check.outputs.new == 'true'
-        run: ./test/smoke-test.sh
-
-      - name: Open PR
-        if: steps.check.outputs.new == 'true'
-        uses: peter-evans/create-pull-request@v8
-        with:
-          branch: bump-imager-version
-          delete-branch: true
-          title: "chore: bump imager ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
-          commit-message: "chore: bump imager ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
-          body: |
-            ghcr.io/siderolabs/imager has a new version available (tracks
-            siderolabs/talos releases): https://github.com/siderolabs/talos/releases/tag/${{ steps.check.outputs.latest }}
-
-            Opened automatically by `.github/workflows/version-check.yml` via
-            `scripts/bump-version.sh imager`. The container-level smoke test already
-            passed against this bump.
+            `scripts/bump-version.sh`. Each component is bumped independently,
+            only the ones that changed appear above. The container-level smoke
+            test (build + a real two-node iBGP/BFD session, see
+            `test/smoke-test.sh`) already passed against these bumps. Merging to
+            `main` publishes the new images (see `ci.yml`).

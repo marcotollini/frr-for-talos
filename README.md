@@ -129,9 +129,9 @@ Then `make build-multiarch && make installer` (or push to `main` or `v*`
 tag and let CI do it).
 
 [`.github/workflows/version-check.yml`](.github/workflows/version-check.yml)
-polls FRR/Talos/imager upstream releases daily and opens a PR (via this
-same `scripts/bump-version.sh`) whenever one is newer than what's
-pinned.
+polls FRR/Talos/imager upstream releases daily and opens one PR (via this
+same `scripts/bump-version.sh`) bumping whichever of them is newer than
+what's pinned.
 
 ## Installing
 
